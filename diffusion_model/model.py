@@ -30,7 +30,8 @@ class UNet(nn.Module):
 
         self.enc1 = Block(img_channels, base_channel)
         self.enc2 = Block(base_channel, base_channel * 2)
-        self.dec1 = Block(base_channel * 2, base_channel)
+        # garde la concaténation d'encodeur pour le skip connection
+        self.dec1 = Block(base_channel * 2 + base_channel, base_channel)
         self.out = nn.Conv2d(base_channel, img_channels, 1)
 
     def forward(self, x, t):
@@ -38,5 +39,6 @@ class UNet(nn.Module):
         e1 = self.enc1(x)
         e2 = self.enc2(nn.functional.avg_pool2d(e1, 2))
         d1 = nn.functional.interpolate(e2, scale_factor=2, mode="nearest")
-        d1 = self.dec1(d1 + e1)
+        d1 = torch.cat([d1, e1], dim=1)
+        d1 = self.dec1(d1)
         return self.out(d1)
