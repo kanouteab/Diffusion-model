@@ -1,4 +1,6 @@
 """Entraînement du modèle de diffusion."""
+import os
+
 import torch
 import torch.nn as nn
 from torch.optim import Adam
@@ -15,7 +17,16 @@ class Trainer:
         self.optim = Adam(self.model.parameters(), lr=lr)
         self.loss_fn = nn.MSELoss()
 
-    def train(self, epochs=10, timesteps=1000):
+    def train(
+        self,
+        epochs=10,
+        timesteps=None,
+        checkpoint_interval=None,
+        checkpoint_dir=None,
+        sample_interval=None,
+        sample_fn=None,
+    ):
+        timesteps = timesteps or self.model.timesteps
         self.model.train()
         for epoch in range(epochs):
             loop = tqdm(self.dataloader, desc=f"Epoch {epoch+1}/{epochs}")
@@ -41,3 +52,13 @@ class Trainer:
                 self.optim.step()
 
                 loop.set_postfix(loss=loss.item())
+
+            epoch_num = epoch + 1
+            if checkpoint_interval and checkpoint_dir and epoch_num % checkpoint_interval == 0:
+                os.makedirs(checkpoint_dir, exist_ok=True)
+                checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_epoch_{epoch_num}.pth")
+                torch.save(self.model.state_dict(), checkpoint_path)
+                print(f"Checkpoint sauvegardé: {checkpoint_path}")
+
+            if sample_interval and sample_fn and epoch_num % sample_interval == 0:
+                sample_fn(epoch_num)
