@@ -70,26 +70,32 @@ class UNet(nn.Module):
             nn.SiLU(),
         )
 
-        self.inc = Block(img_channels, base_channel, time_dim)
-        self.down1 = Block(base_channel, base_channel * 2, time_dim)
-        self.down2 = Block(base_channel * 2, base_channel * 4, time_dim)
-        self.down3 = Block(base_channel * 4, base_channel * 8, time_dim)
-        self.bottleneck = Block(base_channel * 8, base_channel * 8, time_dim)
+        # Encodeur
+        self.inc = Block(img_channels, base_channel, time_dim)              # 3 -> 64
+        self.down1 = Block(base_channel, base_channel * 2, time_dim)        # 64 -> 128
+        self.down2 = Block(base_channel * 2, base_channel * 4, time_dim)    # 128 -> 256
+        self.down3 = Block(base_channel * 4, base_channel * 8, time_dim)    # 256 -> 512
+        self.bottleneck = Block(base_channel * 8, base_channel * 8, time_dim)  # 512 -> 512
 
-        self.up1 = Block(base_channel * 8 + base_channel * 4, base_channel * 4, time_dim)
-        self.up2 = Block(base_channel * 4 + base_channel * 2, base_channel * 2, time_dim)
-        self.up3 = Block(base_channel * 2 + base_channel, base_channel, time_dim)
+        # Décodeur corrigé
+        self.up1 = Block(base_channel * 8 + base_channel * 8, base_channel * 4, time_dim)  # 512+512 -> 256
+        self.up2 = Block(base_channel * 4 + base_channel * 4, base_channel * 2, time_dim)  # 256+256 -> 128
+        self.up3 = Block(base_channel * 2 + base_channel * 2, base_channel, time_dim)       # 128+128 -> 64
+        self.up4 = Block(base_channel + base_channel, base_channel, time_dim)                # 64+64 -> 64
+
         self.out = nn.Conv2d(base_channel, img_channels, 1)
 
     def forward(self, x, t):
         t = self.time_mlp(t)
 
+        # Encodeur
         e1 = self.inc(x, t)
         e2 = self.down1(nn.functional.avg_pool2d(e1, 2), t)
         e3 = self.down2(nn.functional.avg_pool2d(e2, 2), t)
         e4 = self.down3(nn.functional.avg_pool2d(e3, 2), t)
         b = self.bottleneck(nn.functional.avg_pool2d(e4, 2), t)
 
+        # Décodeur
         d1 = nn.functional.interpolate(b, scale_factor=2, mode="nearest")
         d1 = torch.cat([d1, e4], dim=1)
         d1 = self.up1(d1, t)
@@ -104,6 +110,8 @@ class UNet(nn.Module):
 
         d4 = nn.functional.interpolate(d3, scale_factor=2, mode="nearest")
         d4 = torch.cat([d4, e1], dim=1)
+        d4 = self.up4(d4, t)
+
         return self.out(d4)
 
 
