@@ -28,20 +28,13 @@ class Trainer:
     ):
         timesteps = timesteps or self.model.timesteps
         self.model.train()
-
-        # Meilleure loss observée jusque-là
-        best_loss = float("inf")
-
         for epoch in range(epochs):
             loop = tqdm(self.dataloader, desc=f"Epoch {epoch+1}/{epochs}")
-            epoch_loss = 0.0
-
             for batch in loop:
                 if isinstance(batch, (tuple, list)):
                     x, _ = batch
                 else:
                     x = batch
-
                 x = x.to(self.device)
                 t = sample_timesteps(x.size(0), timesteps, device=self.device)
                 x_t, noise = q_sample(
@@ -58,30 +51,14 @@ class Trainer:
                 loss.backward()
                 self.optim.step()
 
-                epoch_loss += loss.item()
                 loop.set_postfix(loss=loss.item())
 
-            # Loss moyenne de l'époque
-            epoch_loss /= len(self.dataloader)
-            print(f"Loss moyenne époque {epoch+1}/{epochs}: {epoch_loss:.4f}")
-
-            # Sauvegarde du meilleur modèle
-            if epoch_loss < best_loss:
-                best_loss = epoch_loss
-                torch.save(self.model.state_dict(), "best_model.pth")
-                print(f"✅ Nouveau meilleur modèle sauvegardé : best_model.pth (loss={best_loss:.4f})")
-
             epoch_num = epoch + 1
-
-            # Sauvegarde périodique des checkpoints
             if checkpoint_interval and checkpoint_dir and epoch_num % checkpoint_interval == 0:
                 os.makedirs(checkpoint_dir, exist_ok=True)
-                checkpoint_path = os.path.join(
-                    checkpoint_dir, f"checkpoint_epoch_{epoch_num}.pth"
-                )
+                checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_epoch_{epoch_num}.pth")
                 torch.save(self.model.state_dict(), checkpoint_path)
                 print(f"Checkpoint sauvegardé: {checkpoint_path}")
 
-            # Génération périodique d'échantillons
             if sample_interval and sample_fn and epoch_num % sample_interval == 0:
                 sample_fn(epoch_num)

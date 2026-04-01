@@ -7,18 +7,19 @@ from torchvision.utils import save_image
 
 from diffusion_model import UNet, Trainer
 from diffusion_model.noise import p_sample_loop
-from diffusion_model.utils import get_dataloader
+from diffusion_model.utils import get_dataloaders
 
 
 def main(args):
     device = torch.device("cuda" if torch.cuda.is_available() and not args.cpu else "cpu")
     model = UNet(img_channels=3, base_channel=64, timesteps=args.timesteps)
-    dataloader = get_dataloader(
+
+    train_loader, val_loader = get_dataloaders(
         batch_size=args.batch_size,
         image_size=args.image_size,
-        train=True,
         num_workers=args.num_workers,
         subset_size=args.subset_size,
+        val_split=args.val_split,
     )
 
     os.makedirs(args.checkpoint_dir, exist_ok=True)
@@ -47,7 +48,14 @@ def main(args):
         print(f"Échantillons d'entrainement sauvegardés: {image_path}")
         model.train()
 
-    trainer = Trainer(model, dataloader, lr=args.lr, device=device)
+    trainer = Trainer(
+        model,
+        train_loader,
+        val_dataloader=val_loader,
+        lr=args.lr,
+        device=device,
+    )
+
     trainer.train(
         epochs=args.epochs,
         timesteps=args.timesteps,
@@ -71,11 +79,12 @@ if __name__ == "__main__":
     parser.add_argument("--image-size", type=int, default=32)
     parser.add_argument("--subset-size", type=int, default=None, help="Taille du sous-ensemble d'entraînement pour des runs rapides")
     parser.add_argument("--num-workers", type=int, default=2)
+    parser.add_argument("--val-split", type=float, default=0.2, help="Proportion du dataset utilisée pour la validation")
     parser.add_argument("--checkpoint-interval", type=int, default=0, help="Enregistre un checkpoint tous les n epochs")
     parser.add_argument("--checkpoint-dir", type=str, default="outputs/checkpoints")
     parser.add_argument("--sample-interval", type=int, default=0, help="Génère un échantillon tous les n epochs")
     parser.add_argument("--sample-num", type=int, default=4)
-    parser.add_argument("--sample-timesteps", type=int, default=None, help="Nombre de timesteps à utiliser pour les échantillons de validation")
+    parser.add_argument("--sample-timesteps", type=int, default=None, help="Nombre de timesteps à utiliser pour les échantillons")
     parser.add_argument("--sample-output-dir", type=str, default="outputs/train_samples")
     parser.add_argument("--output", type=str, default="diffusion_model.pth")
     parser.add_argument("--resume", type=str, default=None, help="Chemin du checkpoint à reprendre")
