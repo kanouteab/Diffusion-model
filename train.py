@@ -9,7 +9,6 @@ from diffusion_model import UNet, Trainer
 from diffusion_model.noise import p_sample_loop
 from diffusion_model.utils import get_dataloaders
 
-
 def main(args):
     device = torch.device("cuda" if torch.cuda.is_available() and not args.cpu else "cpu")
     model = UNet(img_channels=3, base_channel=64, timesteps=args.timesteps)
