@@ -1,0 +1,17 @@
+[
+  {
+    "checkpoint": "outputs/checkpoints/checkpoint_epoch_5.pth",
+    "mse": 0.1354696460068226,
+    "num_eval_samples": 640
+  },
+  {
+    "checkpoint": "outputs/checkpoints/checkpoint_epoch_1.pth",
+    "mse": 0.18198583871126175,
+    "num_eval_samples": 640
+  },
+  {
+    "checkpoint": "outputs/unet_trained.pth",
+    "mse": 1.000503522157669,
+    "num_eval_samples": 640
+  }
+]
