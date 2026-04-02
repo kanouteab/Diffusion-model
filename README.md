@@ -21,11 +21,36 @@
 ```bash
 pip install -r requirements.txt
 ```
-2. Lancer l'entraînement:
+2. Utiliser le point d'entree principal:
+```bash
+python run_all.py --help
+```
+3. Lancer le pipeline complet (train + evaluate + sample + compare):
+```bash
+python run_all.py all --epochs 5 --batch-size 32 --subset-size 5000 --timesteps 100 --compare-score --cpu
+```
+Ce mode genere aussi automatiquement:
+- `outputs/learning_history.json` (historique train/val)
+- `outputs/learning_curves.png` (courbes d'apprentissage)
+- `outputs/performance_report.json` (comparaison modele entraine vs pre-entraine)
+- `outputs/performance_comparison.png` (graphique de comparaison MSE)
+
+Comparer explicitement votre modele a un modele pre-entraine:
+```bash
+python run_all.py all --train-output outputs/mon_modele.pth --pretrained-model outputs/unet_trained.pth --compare-score --include-pretrained-in-compare --cpu
+```
+4. Ou lancer une seule etape:
+```bash
+python run_all.py train --epochs 20 --batch-size 128
+python run_all.py evaluate --model outputs/unet_trained_final.pth --timesteps 100 --cpu
+python run_all.py sample --model outputs/unet_trained_final.pth --output outputs/final_samples.pt --cpu
+python run_all.py compare --checkpoints outputs/checkpoints/checkpoint_epoch_5.pth outputs/checkpoints/checkpoint_epoch_10.pth --output-image outputs/checkpoint_comparison.png --timesteps 100 --score --cpu
+```
+5. Lancer l'entraînement (ancienne commande directe):
 ```bash
 python train.py --epochs 20 --batch-size 128
 ```
-3. Générer des échantillons:
+6. Générer des échantillons (ancienne commande directe):
 ```bash
 python sample.py --model diffusion_model.pth --output samples.pt
 ```
@@ -52,6 +77,10 @@ python evaluate.py --model outputs/unet_trained_final.pth --timesteps 100 --batc
 Comparer deux checkpoints par génération d'images:
 ```bash
 python compare_checkpoints.py --checkpoints outputs/checkpoints/checkpoint_epoch_5.pth outputs/checkpoints/checkpoint_epoch_10.pth --output-image outputs/checkpoint_comparison.png --timesteps 100 --num-samples 4 --cpu
+```
+Comparer plusieurs checkpoints avec image + score MSE (classement + JSON):
+```bash
+python compare_checkpoints.py --checkpoints outputs/checkpoints/checkpoint_epoch_5.pth outputs/checkpoints/checkpoint_epoch_10.pth --output-image outputs/checkpoint_comparison.png --timesteps 100 --num-samples 4 --score --score-subset-size 1000 --score-num-batches 10 --score-output outputs/checkpoint_scores.json --cpu
 ```
 Générer des images et un GIF à partir d'un checkpoint:
 ```bash
