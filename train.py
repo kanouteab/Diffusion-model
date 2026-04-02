@@ -12,7 +12,7 @@ from diffusion_model.utils import get_dataloaders
 
 def main(args):
     device = torch.device("cuda" if torch.cuda.is_available() and not args.cpu else "cpu")
-    model = UNet(img_channels=3, base_channel=64, timesteps=args.timesteps)
+    model = UNet(img_channels=3, base_channel=128, timesteps=args.timesteps)
 
     train_loader, val_loader = get_dataloaders(
         batch_size=args.batch_size,
