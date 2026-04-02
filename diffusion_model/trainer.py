@@ -6,7 +6,7 @@ import torch.nn as nn
 from torch.optim import Adam
 from tqdm import tqdm
 
-from .noise import q_sample, sample_timesteps
+from diffusion_model.noise import q_sample, sample_timesteps
 
 
 class Trainer:
@@ -28,7 +28,6 @@ class Trainer:
         sample_fn=None,
     ):
         timesteps = timesteps or self.model.timesteps
-
         best_loss = float("inf")
 
         for epoch in range(epochs):
