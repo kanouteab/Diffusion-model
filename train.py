@@ -1,117 +1,122 @@
-"""Entraînement du modèle de diffusion."""
+"""Script d'entraînement du modèle de diffusion."""
+import argparse
 import os
 
 import torch
-import torch.nn as nn
-from torch.optim import Adam
-from tqdm import tqdm
+from torchvision.utils import save_image
 
-from .noise import q_sample, sample_timesteps
+from diffusion_model import UNet, Trainer
+from diffusion_model.noise import p_sample_loop
+from diffusion_model.utils import get_dataloaders
 
 
-class Trainer:
-    def __init__(self, model, dataloader, val_dataloader=None, lr=2e-4, device="cpu"):
-        self.model = model.to(device)
-        self.dataloader = dataloader
-        self.val_dataloader = val_dataloader
-        self.device = device
-        self.optim = Adam(self.model.parameters(), lr=lr)
-        self.loss_fn = nn.MSELoss()
+def main(args):
+    device = torch.device("cuda" if torch.cuda.is_available() and not args.cpu else "cpu")
+    model = UNet(img_channels=3, base_channel=64, timesteps=args.timesteps)
 
-    def train(
-        self,
-        epochs=10,
-        timesteps=None,
-        checkpoint_interval=None,
-        checkpoint_dir=None,
-        sample_interval=None,
-        sample_fn=None,
-    ):
-        timesteps = timesteps or self.model.timesteps
+    train_loader, val_loader = get_dataloaders(
+        batch_size=args.batch_size,
+        image_size=args.image_size,
+        num_workers=args.num_workers,
+        subset_size=args.subset_size,
+        val_split=args.val_split,
+    )
 
-        best_loss = float("inf")
+    os.makedirs(args.checkpoint_dir, exist_ok=True)
+    os.makedirs(args.sample_output_dir, exist_ok=True)
 
-        for epoch in range(epochs):
-            self.model.train()
-            loop = tqdm(self.dataloader, desc=f"Epoch {epoch+1}/{epochs}")
-            train_loss = 0.0
+    if args.resume:
+        if os.path.isfile(args.resume):
+            model.load_state_dict(torch.load(args.resume, map_location=device))
+            print(f"Reprise depuis le checkpoint: {args.resume}")
+        else:
+            raise FileNotFoundError(f"Checkpoint de reprise introuvable: {args.resume}")
 
-            for batch in loop:
-                if isinstance(batch, (tuple, list)):
-                    x, _ = batch
-                else:
-                    x = batch
+    def save_epoch_samples(epoch):
+        model.eval()
+        with torch.no_grad():
+            samples = p_sample_loop(
+                model,
+                (args.sample_num, 3, args.image_size, args.image_size),
+                args.sample_timesteps,
+                device,
+            )
+        samples = (samples.clamp(-1, 1) + 1) / 2.0
+        image_path = os.path.join(args.sample_output_dir, f"epoch_{epoch}_samples.png")
+        save_image(samples, image_path, nrow=min(8, args.sample_num))
+        torch.save(samples, os.path.join(args.sample_output_dir, f"epoch_{epoch}_samples.pt"))
+        print(f"Échantillons d'entraînement sauvegardés: {image_path}")
+        model.train()
 
-                x = x.to(self.device)
-                t = sample_timesteps(x.size(0), timesteps, device=self.device)
-                x_t, noise = q_sample(
-                    x,
-                    t,
-                    self.model.sqrt_alphas_cumprod,
-                    self.model.sqrt_one_minus_alphas_cumprod,
-                )
+    trainer = Trainer(
+        model,
+        train_loader,
+        val_dataloader=val_loader,
+        lr=args.lr,
+        device=device,
+    )
 
-                predicted_noise = self.model(x_t, t)
-                loss = self.loss_fn(predicted_noise, noise)
+    trainer.train(
+        epochs=args.epochs,
+        timesteps=args.timesteps,
+        checkpoint_interval=args.checkpoint_interval,
+        checkpoint_dir=args.checkpoint_dir,
+        sample_interval=args.sample_interval,
+        sample_fn=save_epoch_samples,
+    )
 
-                self.optim.zero_grad()
-                loss.backward()
-                self.optim.step()
+    if args.output:
+        torch.save(model.state_dict(), args.output)
+        print(f"Modèle final sauvegardé dans {args.output}")
 
-                train_loss += loss.item()
-                loop.set_postfix(loss=loss.item())
 
-            train_loss /= len(self.dataloader)
-            print(f"Loss moyenne train époque {epoch+1}/{epochs}: {train_loss:.4f}")
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Entraîne un modèle de diffusion simple")
+    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--lr", type=float, default=2e-4)
+    parser.add_argument("--timesteps", type=int, default=1000)
+    parser.add_argument("--image-size", type=int, default=32)
+    parser.add_argument(
+        "--subset-size",
+        type=int,
+        default=None,
+        help="Taille du sous-ensemble d'entraînement pour des runs rapides",
+    )
+    parser.add_argument("--num-workers", type=int, default=2)
+    parser.add_argument(
+        "--val-split",
+        type=float,
+        default=0.2,
+        help="Proportion du dataset utilisée pour la validation",
+    )
+    parser.add_argument(
+        "--checkpoint-interval",
+        type=int,
+        default=0,
+        help="Enregistre un checkpoint tous les n epochs",
+    )
+    parser.add_argument("--checkpoint-dir", type=str, default="outputs/checkpoints")
+    parser.add_argument(
+        "--sample-interval",
+        type=int,
+        default=0,
+        help="Génère un échantillon tous les n epochs",
+    )
+    parser.add_argument("--sample-num", type=int, default=4)
+    parser.add_argument(
+        "--sample-timesteps",
+        type=int,
+        default=None,
+        help="Nombre de timesteps à utiliser pour les échantillons",
+    )
+    parser.add_argument("--sample-output-dir", type=str, default="outputs/train_samples")
+    parser.add_argument("--output", type=str, default="diffusion_model.pth")
+    parser.add_argument("--resume", type=str, default=None, help="Chemin du checkpoint à reprendre")
+    parser.add_argument("--cpu", action="store_true")
+    args = parser.parse_args()
 
-            val_loss = None
-            if self.val_dataloader is not None:
-                self.model.eval()
-                val_loss = 0.0
+    if args.sample_timesteps is None:
+        args.sample_timesteps = args.timesteps
 
-                with torch.no_grad():
-                    for batch in self.val_dataloader:
-                        if isinstance(batch, (tuple, list)):
-                            x, _ = batch
-                        else:
-                            x = batch
-
-                        x = x.to(self.device)
-                        t = sample_timesteps(x.size(0), timesteps, device=self.device)
-                        x_t, noise = q_sample(
-                            x,
-                            t,
-                            self.model.sqrt_alphas_cumprod,
-                            self.model.sqrt_one_minus_alphas_cumprod,
-                        )
-
-                        predicted_noise = self.model(x_t, t)
-                        loss = self.loss_fn(predicted_noise, noise)
-                        val_loss += loss.item()
-
-                val_loss /= len(self.val_dataloader)
-                print(f"Loss moyenne validation époque {epoch+1}/{epochs}: {val_loss:.4f}")
-
-            current_loss = val_loss if val_loss is not None else train_loss
-
-            if current_loss < best_loss:
-                best_loss = current_loss
-                torch.save(self.model.state_dict(), "best_model.pth")
-                metric_name = "val_loss" if val_loss is not None else "train_loss"
-                print(
-                    f"✅ Nouveau meilleur modèle sauvegardé : best_model.pth "
-                    f"({metric_name}={best_loss:.4f})"
-                )
-
-            epoch_num = epoch + 1
-
-            if checkpoint_interval and checkpoint_dir and epoch_num % checkpoint_interval == 0:
-                os.makedirs(checkpoint_dir, exist_ok=True)
-                checkpoint_path = os.path.join(
-                    checkpoint_dir, f"checkpoint_epoch_{epoch_num}.pth"
-                )
-                torch.save(self.model.state_dict(), checkpoint_path)
-                print(f"Checkpoint sauvegardé: {checkpoint_path}")
-
-            if sample_interval and sample_fn and epoch_num % sample_interval == 0:
-                sample_fn(epoch_num)
+    main(args)
