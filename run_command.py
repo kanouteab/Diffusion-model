@@ -1,5 +1,5 @@
 import subprocess
-
+# python run_command.py
 command = [
     "python", "run_all.py", "all",
     "--epochs", "25",
