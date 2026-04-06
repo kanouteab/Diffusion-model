@@ -1,4 +1,4 @@
-"""Point d'entree unique pour piloter train/evaluate/sample/compare."""
+"""Point d'entree unique pour piloter train/evaluate/sample/compare/denoise."""
 import argparse
 import glob
 import importlib
@@ -8,7 +8,9 @@ import re
 from argparse import Namespace
 
 import compare_checkpoints as compare_script
+import denoise as denoise_script
 import evaluate as evaluate_script
+import evaluate_denoising as evaluate_denoising_script
 import sample as sample_script
 import train as train_script
 
@@ -20,22 +22,30 @@ def _checkpoint_sort_key(path: str) -> int:
     return -1
 
 
-def run_train(args: Namespace) -> None:
+def run_train(args: Namespace):
     if args.sample_timesteps is None:
         args.sample_timesteps = args.timesteps
     return train_script.main(args)
 
 
-def run_evaluate(args: Namespace) -> None:
+def run_evaluate(args: Namespace):
     return evaluate_script.main(args)
 
 
-def run_sample(args: Namespace) -> None:
-    sample_script.main(args)
+def run_sample(args: Namespace):
+    return sample_script.main(args)
 
 
-def run_compare(args: Namespace) -> None:
-    compare_script.main(args)
+def run_compare(args: Namespace):
+    return compare_script.main(args)
+
+
+def run_denoise(args: Namespace):
+    return denoise_script.main(args)
+
+
+def run_evaluate_denoising(args: Namespace):
+    return evaluate_denoising_script.main(args)
 
 
 def _save_json(path: str, data: dict) -> None:
@@ -48,9 +58,9 @@ def _plot_learning_curves(history: dict, output_path: str) -> bool:
     if not history or not history.get("train_loss"):
         print("Courbe non generee: historique train_loss vide.")
         return False
+
     try:
-        module_name = "matplotlib" + ".pyplot"
-        plt = importlib.import_module(module_name)
+        plt = importlib.import_module("matplotlib.pyplot")
     except ImportError:
         print("Matplotlib indisponible: courbe d'apprentissage non generee.")
         return False
@@ -63,11 +73,17 @@ def _plot_learning_curves(history: dict, output_path: str) -> bool:
     if val_loss:
         plt.plot(epochs[: len(val_loss)], val_loss, marker="s", label="val_loss")
 
+    if history.get("lr"):
+        ax1 = plt.gca()
+        ax2 = ax1.twinx()
+        ax2.plot(epochs[: len(history["lr"])], history["lr"], linestyle="--", label="lr")
+        ax2.set_ylabel("Learning rate")
+
     plt.title("Courbes d'apprentissage")
     plt.xlabel("Epoch")
     plt.ylabel("Loss (MSE)")
     plt.grid(alpha=0.3)
-    plt.legend()
+    plt.legend(loc="upper right")
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     plt.tight_layout()
     plt.savefig(output_path)
@@ -81,7 +97,7 @@ def _plot_performance_report(report: dict, output_path: str) -> bool:
     labels = []
 
     trained = report.get("trained_model")
-    if trained:
+    if trained and trained.get("avg_mse") is not None:
         labels.append("trained")
         values.append(trained.get("avg_mse", 0.0))
 
@@ -95,8 +111,7 @@ def _plot_performance_report(report: dict, output_path: str) -> bool:
         return False
 
     try:
-        module_name = "matplotlib" + ".pyplot"
-        plt = importlib.import_module(module_name)
+        plt = importlib.import_module("matplotlib.pyplot")
     except ImportError:
         print("Matplotlib indisponible: graphique performance non genere.")
         return False
@@ -111,6 +126,43 @@ def _plot_performance_report(report: dict, output_path: str) -> bool:
     plt.savefig(output_path)
     plt.close()
     print(f"Graphique de performance sauvegarde: {output_path}")
+    return True
+
+
+def _plot_denoising_report(report: dict, output_path: str) -> bool:
+    try:
+        plt = importlib.import_module("matplotlib.pyplot")
+    except ImportError:
+        print("Matplotlib indisponible: graphique denoising non genere.")
+        return False
+
+    labels = ["noisy", "restored"]
+    mse_values = [report.get("mse_noisy", 0.0), report.get("mse_restored", 0.0)]
+    psnr_values = [report.get("psnr_noisy", 0.0), report.get("psnr_restored", 0.0)]
+    ssim_values = [report.get("ssim_noisy", 0.0), report.get("ssim_restored", 0.0)]
+
+    plt.figure(figsize=(10, 5))
+
+    plt.subplot(1, 3, 1)
+    plt.bar(labels, mse_values)
+    plt.title("MSE")
+    plt.grid(axis="y", alpha=0.3)
+
+    plt.subplot(1, 3, 2)
+    plt.bar(labels, psnr_values)
+    plt.title("PSNR")
+    plt.grid(axis="y", alpha=0.3)
+
+    plt.subplot(1, 3, 3)
+    plt.bar(labels, ssim_values)
+    plt.title("SSIM")
+    plt.grid(axis="y", alpha=0.3)
+
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    plt.tight_layout()
+    plt.savefig(output_path)
+    plt.close()
+    print(f"Graphique denoising sauvegarde: {output_path}")
     return True
 
 
@@ -136,6 +188,9 @@ def run_all_pipeline(args: Namespace) -> None:
         output=args.train_output,
         history_output=args.history_output,
         resume=args.resume,
+        best_model_output=args.best_model_output,
+        weight_decay=args.weight_decay,
+        grad_clip=args.grad_clip,
         cpu=args.cpu,
     )
     history = run_train(train_args)
@@ -192,6 +247,40 @@ def run_all_pipeline(args: Namespace) -> None:
     _save_json(args.performance_output, report)
     print(f"Rapport de performance sauvegarde: {args.performance_output}")
     _plot_performance_report(report, args.performance_plot)
+
+    print("=== Etape 2bis/4: evaluation débruitage ===")
+    denoise_eval_args = Namespace(
+        model=args.train_output,
+        timesteps=args.timesteps,
+        noise_timestep=args.noise_timestep,
+        image_size=args.image_size,
+        batch_size=args.eval_batch_size,
+        subset_size=args.eval_subset_size,
+        num_workers=args.eval_num_workers,
+        num_batches=args.eval_num_batches,
+        output_json=args.denoising_metrics_output,
+        output_image=args.denoising_metrics_image,
+        cpu=args.cpu,
+    )
+    denoising_report = run_evaluate_denoising(denoise_eval_args)
+    if denoising_report is None and os.path.isfile(args.denoising_metrics_output):
+        with open(args.denoising_metrics_output, "r", encoding="utf-8") as f:
+            denoising_report = json.load(f)
+    if denoising_report:
+        _plot_denoising_report(denoising_report, args.denoising_plot)
+
+    print("=== Etape 2ter/4: exemples de débruitage ===")
+    denoise_args = Namespace(
+        model=args.train_output,
+        timesteps=args.timesteps,
+        noise_timestep=args.noise_timestep,
+        image_size=args.image_size,
+        num_samples=args.sample_num,
+        num_workers=args.eval_num_workers,
+        output_dir=args.denoising_examples_dir,
+        cpu=args.cpu,
+    )
+    run_denoise(denoise_args)
 
     print("=== Etape 3/4: generation d'echantillons ===")
     sample_args = Namespace(
@@ -269,6 +358,9 @@ def add_train_parser(subparsers) -> None:
     parser.add_argument("--output", type=str, default="diffusion_model.pth")
     parser.add_argument("--history-output", type=str, default="")
     parser.add_argument("--resume", type=str, default=None)
+    parser.add_argument("--best-model-output", type=str, default="outputs/best_model.pth")
+    parser.add_argument("--weight-decay", type=float, default=1e-4)
+    parser.add_argument("--grad-clip", type=float, default=1.0)
     parser.add_argument("--cpu", action="store_true")
     parser.set_defaults(func=run_train)
 
@@ -321,7 +413,8 @@ def add_compare_parser(subparsers) -> None:
 
 
 def add_all_parser(subparsers) -> None:
-    parser = subparsers.add_parser("all", help="Pipeline complet: train + evaluate + sample + compare")
+    parser = subparsers.add_parser("all", help="Pipeline complet: train + evaluate + denoise + sample + compare")
+
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=2e-4)
@@ -342,6 +435,10 @@ def add_all_parser(subparsers) -> None:
     parser.add_argument("--history-output", type=str, default="outputs/learning_history.json")
     parser.add_argument("--curves-output", type=str, default="outputs/learning_curves.png")
     parser.add_argument("--resume", type=str, default=None)
+    parser.add_argument("--best-model-output", type=str, default="outputs/best_model.pth")
+    parser.add_argument("--weight-decay", type=float, default=1e-4)
+    parser.add_argument("--grad-clip", type=float, default=1.0)
+
     parser.add_argument("--pretrained-model", type=str, default="outputs/unet_trained.pth")
     parser.add_argument("--performance-output", type=str, default="outputs/performance_report.json")
     parser.add_argument("--performance-plot", type=str, default="outputs/performance_comparison.png")
@@ -350,6 +447,12 @@ def add_all_parser(subparsers) -> None:
     parser.add_argument("--eval-subset-size", type=int, default=1000)
     parser.add_argument("--eval-num-workers", type=int, default=2)
     parser.add_argument("--eval-num-batches", type=int, default=10)
+
+    parser.add_argument("--noise-timestep", type=int, default=300)
+    parser.add_argument("--denoising-metrics-output", type=str, default="outputs/denoising_metrics.json")
+    parser.add_argument("--denoising-metrics-image", type=str, default="outputs/noisy_vs_restored_grid.png")
+    parser.add_argument("--denoising-plot", type=str, default="outputs/denoising_comparison.png")
+    parser.add_argument("--denoising-examples-dir", type=str, default="outputs/denoising_examples")
 
     parser.add_argument("--sample-output", type=str, default="outputs/final_samples.pt")
     parser.add_argument("--sample-output-image", type=str, default="outputs/final_samples.png")
