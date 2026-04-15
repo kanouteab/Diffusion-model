@@ -1,0 +1,13 @@
+{
+  "trained_model": {
+    "path": "outputs/mon_modele.pth",
+    "avg_mse": 0.14246051609516144,
+    "num_samples": 640
+  },
+  "pretrained_model": {
+    "path": "outputs/unet_trained.pth",
+    "avg_mse": 1.001677829027176,
+    "num_samples": 640
+  },
+  "delta_mse_pretrained_minus_trained": 0.8592173129320145
+}

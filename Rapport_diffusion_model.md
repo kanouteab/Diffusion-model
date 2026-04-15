@@ -1,97 +1,149 @@
-# Rapport d'activité - Diffusion-model
+# Rapport final - Diffusion-model
 
-Date: 31 mars 2026
+Date : 1 avril 2026
 
-## 1. Contexte
+## 1. Introduction
 
-Ce dépôt Python implémente un modèle de diffusion DDPM avec une architecture UNet modulaire, un plan de bruit, une boucle d'entraînement et des utilitaires de génération.
+Ce rapport final présente les résultats et les choix techniques du projet `Diffusion-model`, une implémentation d'un modèle de diffusion (DDPM) sur le dataset CIFAR-10.
 
-L'objectif principal a été d'améliorer la robustesse du projet, d'ajouter des fonctionnalités de checkpointing, de reprise d'entraînement, de génération d'images et de GIF, ainsi que des outils d'évaluation et de comparaison de checkpoints.
+L'objectif est de construire un pipeline complet : entraînement, sauvegarde de checkpoints, reprise d'entraînement, génération d'images, évaluation et comparaison de modèles.
 
-## 2. Architecture du projet
+## 2. Objectifs du projet
 
-Fichiers principaux:
+- Implémenter un modèle de diffusion basé sur une architecture UNet.
+- Permettre l'entraînement avec checkpoints et la reprise à partir d'un checkpoint.
+- Générer des images et des GIFs pour observer l'évolution de la diffusion inversée.
+- Évaluer la qualité du modèle sur un sous-ensemble CIFAR-10.
+- Documenter le projet et fournir un rapport final.
 
-- `diffusion_model/model.py`
-- `diffusion_model/noise.py`
-- `diffusion_model/scheduler.py`
-- `diffusion_model/trainer.py`
-- `diffusion_model/utils.py`
-- `train.py`
-- `sample.py`
-- `evaluate.py`
-- `compare_checkpoints.py`
-- `README.md`
-- `.gitignore`
+## 3. Méthodologie
 
-## 3. Améliorations apportées
+### 3.1. Jeu de données
 
-### 3.1. Modèle UNet
+Le projet utilise CIFAR-10, un ensemble standard de 60 000 images couleur 32×32 réparties en 10 classes.
 
-- Ajout de l'encodage temporel sinusoïdal (`TimeEmbedding`) dans `diffusion_model/model.py`.
-- Renforcement de l'architecture UNet avec des blocs plus profonds et des couches de convolution supplémentaires.
-- Ajout de compatibilité de chargement de checkpoints anciens via `LegacyUNet`.
-- Amélioration de la robustesse de chargement de modèles avec `strict=False` et fallback pour les poids partiels.
+Le chargement des données est géré par `diffusion_model/utils.py` avec des options :
 
-### 3.2. Entraînement
+- `--subset-size` pour accélérer les tests,
+- `--image-size` pour forcer la taille des images si nécessaire,
+- `--num-workers` pour le chargement multi-processus.
 
-- Ajout de checkpoints périodiques durant l'entraînement dans `diffusion_model/trainer.py`.
-- Ajout de la reprise d'entraînement avec le paramètre `--resume` dans `train.py`.
-- Ajout de la sauvegarde automatique d'échantillons pendant l'entraînement avec `--sample-interval`.
-- Support de sous-ensembles de données CIFAR-10 via `--subset-size` pour des tests rapides.
-- Gestion de l'entraînement sur CPU avec `--cpu`.
+### 3.2. Architecture du modèle
 
-### 3.3. Génération et visualisation
+L'architecture UNet est définie dans `diffusion_model/model.py`.
 
-- `sample.py` supporte désormais:
-  - génération d'images sauvegardées (`--output-image`)
-  - génération de GIFs d'animation (`--output-gif`)
-  - contrôle du nombre d'échantillons et des timesteps de génération
-- Ajout de la collecte d'images intermédiaires pour visualiser la progression de diffusion.
+Principales fonctionnalités :
 
-### 3.4. Évaluation et comparaison
+- Encodage temporel sinusoïdal pour intégrer le pas de diffusion,
+- Blocs convolutifs en encodeur et décodeur,
+- Skip connections pour préserver les détails spatiaux,
+- Support de chargement de checkpoints plus anciens avec `LegacyUNet`.
 
-- `evaluate.py`: évaluation d'un checkpoint sur CIFAR-10 avec métriques de reconstruction.
-- `compare_checkpoints.py`: comparaison visuelle entre deux checkpoints en générant des images côte à côte.
+### 3.3. Plan de diffusion
 
-### 3.5. Documentation et outils de projet
+La logique de diffusion et de débruitage est répartie entre :
 
-- Mise à jour de `README.md` avec des exemples d'utilisation pour l'entraînement, la génération, la reprise et l'évaluation.
-- Ajout d'un fichier `.gitignore` pour exclure `__pycache__`, les fichiers de sortie, et les données temporaires.
+- `diffusion_model/noise.py` : gestion du bruit direct et de l'échantillonnage,
+- `diffusion_model/scheduler.py` : définition du plan de bruit linéaire,
+- `diffusion_model/trainer.py` : boucle d'entraînement et calcul des pertes.
 
-## 4. Exemples de commandes utilisées
+### 3.4. Entraînement et objets sauvegardés
 
-- Entraînement court:
-  ```bash
-  python train.py --epochs 1 --batch-size 32 --lr 2e-4 --timesteps 50 --image-size 32 --output outputs/unet_trained.pth --cpu
-  ```
+Le script `train.py` orchestre :
 
-- Entraînement avec checkpoints et échantillons:
-  ```bash
-  python train.py --epochs 3 --batch-size 32 --lr 2e-4 --timesteps 100 --image-size 32 --subset-size 1000 --checkpoint-interval 1 --checkpoint-dir outputs/checkpoints --sample-interval 1 --sample-num 4 --sample-timesteps 100 --sample-output-dir outputs/train_samples --output outputs/unet_trained_medium.pth --cpu
-  ```
+- l'initialisation du modèle,
+- le chargement des données,
+- la sauvegarde régulière de checkpoints,
+- la génération d'échantillons intermédiaires.
 
-- Entraînement prolongé:
-  ```bash
-  python train.py --epochs 10 --batch-size 32 --lr 2e-4 --timesteps 100 --image-size 32 --subset-size 1000 --num-workers 0 --checkpoint-interval 1 --checkpoint-dir outputs/checkpoints --sample-interval 1 --sample-num 4 --sample-timesteps 100 --sample-output-dir outputs/train_samples --output outputs/unet_trained_final.pth --cpu
-  ```
+Paramètres importants :
 
-## 5. Résultats générés
+- `--epochs`,
+- `--batch-size`,
+- `--lr`,
+- `--timesteps`,
+- `--checkpoint-interval`,
+- `--sample-interval`,
+- `--resume`.
 
-- Modèle sauvegardé: `outputs/unet_trained_final.pth`
-- Checkpoints: `outputs/checkpoints/checkpoint_epoch_*.pth`
-- Échantillons générés pendant l'entraînement: `outputs/train_samples/`
-- Fichiers de sortie potentiels: `outputs/samples.png`, `outputs/samples.gif`, `outputs/checkpoint_comparison.png`
+## 4. Résultats obtenus
 
-## 6. État Git et branche
+### 4.1. Artefacts produits
 
-- Branche active: `Abdou`
-- Dernière action: commit et push des modifications vers `origin Abdou`
-- Modifications principales: ajout de l'évaluation CIFAR-10, comparaison de checkpoints, UNet plus profond, reprise d'entraînement, `.gitignore`, et documentation mise à jour.
+Le projet a généré les éléments suivants :
 
-## 7. Prochaines étapes suggérées
+- Modèle final : `outputs/unet_trained_final.pth`
+- Checkpoints : `outputs/checkpoints/checkpoint_epoch_*.pth`
+- Échantillons d'entraînement : `outputs/train_samples/`
+- Rapport final : `Rapport_diffusion_model.md` et `Rapport_diffusion_model.pdf`
 
-- Entraîner plus longtemps sur le dataset complet CIFAR-10 avec `timesteps=1000`.
-- Générer des GIFs pour visualiser la diffusion de plusieurs checkpoints.
-- Comparer la qualité des images produites par plusieurs checkpoints avec `compare_checkpoints.py`.
-- Ajouter un script d'évaluation automatique de FID/IS si nécessaire.
+### 4.2. Évaluation
+
+La métrique d'évaluation implémentée est la perte MSE moyenne sur des images bruitées et reconstruites, calculée par `evaluate.py`.
+
+- Résultat clé à insérer : MSE moyen final sur le sous-ensemble CIFAR-10.
+
+### 4.3. Analyse qualitative
+
+La génération d'images est testée avec `sample.py` et `compare_checkpoints.py`, ce qui permet de visualiser :
+
+- la qualité des images produites,
+- l'effet des différents checkpoints,
+- la progression de la diffusion inverse.
+
+## 5. Figures et emplacements
+
+### Figure 1 — Courbe d'apprentissage
+
+Insérer ici la courbe de perte d'entraînement (loss) en fonction des epochs.
+
+> [Figure 1 : Courbe d'apprentissage – perte d'entraînement vs époque]
+
+### Figure 2 — Évolution de la production d'images
+
+Insérer ici une figure montrant des images générées à différents epochs ou à différents checkpoints.
+
+> [Figure 2 : Échantillons générés à différents checkpoints / epochs]
+
+### Figure 3 — Évaluation CIFAR-10
+
+Insérer ici la courbe de la métrique MSE sur le sous-ensemble de validation.
+
+> [Figure 3 : Perte MSE moyenne sur l'évaluation CIFAR-10]
+
+### Figure 4 — Comparaison de checkpoints
+
+Insérer ici une grille comparant deux ou plusieurs checkpoints avec `compare_checkpoints.py`.
+
+> [Figure 4 : Comparaison visuelle de checkpoints]
+
+## 6. Interprétation préliminaire
+
+- La courbe d'apprentissage devrait montrer une décroissance stable de la perte, indiquant que le modèle apprend à prédire le bruit.
+- La comparaison des checkpoints permet d'identifier à quel moment la qualité d'image se stabilise.
+- La métrique MSE seule ne suffit pas : il faudra compléter avec une analyse visuelle et, potentiellement, FID/IS à l'avenir.
+
+## 7. Points forts du projet
+
+- Pipeline complet : entraînement, sauvegarde, reprise, génération et évaluation.
+- Architecture UNet modulable et compatible avec différents timesteps.
+- Support de la génération d'images et de GIFs.
+- Documentation claire dans `README.md`.
+- Rapport final disponible pour clôturer le projet.
+
+## 8. Limites et perspectives
+
+- Le dataset CIFAR-10 est de petite résolution, donc les résultats ne sont pas comparables aux grands modèles de diffusion sur haute résolution.
+- L'évaluation est actuellement limitée à la MSE ; il est recommandé d'ajouter un calcul de FID/IS pour une mesure de qualité plus robuste.
+- La génération de GIFs et la comparaison de checkpoints peuvent être automatisées davantage.
+
+## 9. Prochaines étapes
+
+1. Générer les figures manquantes : courbe d'entraînement, MSE d'évaluation, grilles de génération, comparaison de checkpoints.
+2. Ajouter un script automatique pour produire un PDF final à partir du Markdown.
+3. Intégrer une évaluation perceptuelle (FID/IS) si les ressources GPU le permettent.
+4. Documenter les commandes exactes utilisées pour chaque expérience finale.
+
+---
+
+*Note : ce rapport est structuré pour devenir le document final du projet. Les emplacements des figures sont indiqués ci-dessus et seront complétés après production des graphiques.*

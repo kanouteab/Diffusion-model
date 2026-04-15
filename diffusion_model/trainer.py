@@ -111,17 +111,14 @@ class Trainer:
         checkpoint_dir=None,
         sample_interval=None,
         sample_fn=None,
+        val_dataloader=None,
+        val_num_batches=10,
     ):
         timesteps = timesteps or self.model.timesteps
-        best_loss = float("inf")
-
-        self._build_scheduler(epochs)
-
+        self.model.train()
         for epoch in range(epochs):
             self.model.train()
             loop = tqdm(self.dataloader, desc=f"Epoch {epoch+1}/{epochs}")
-            train_loss = 0.0
-
             for batch in loop:
                 if isinstance(batch, (tuple, list)):
                     x, _ = batch
@@ -144,30 +141,7 @@ class Trainer:
                 loss.backward()
                 self.optim.step()
 
-                if self.use_ema and self.ema_model is not None:
-                    self.ema_helper.update_model_average(self.ema_model, self.model)
-                    self.ema_helper.update_buffers(self.ema_model, self.model)
-
-                train_loss += loss.item()
-                loop.set_postfix(loss=loss.item(), lr=self.optim.param_groups[0]["lr"])
-
-            train_loss /= len(self.dataloader)
-            print(f"Loss moyenne train époque {epoch+1}/{epochs}: {train_loss:.4f}")
-
-            val_loss = self._run_validation(timesteps)
-            if val_loss is not None:
-                print(f"Loss moyenne validation époque {epoch+1}/{epochs}: {val_loss:.4f}")
-
-            current_loss = val_loss if val_loss is not None else train_loss
-
-            if current_loss < best_loss:
-                best_loss = current_loss
-                self._save_best_model("best_model.pth")
-                metric_name = "val_loss" if val_loss is not None else "train_loss"
-                print(f"✅ Nouveau meilleur modèle sauvegardé : best_model.pth ({metric_name}={best_loss:.4f})")
-
-            if self.scheduler is not None:
-                self.scheduler.step()
+                loop.set_postfix(loss=loss.item())
 
             epoch_num = epoch + 1
 
@@ -188,5 +162,4 @@ class Trainer:
                 print(f"Checkpoint sauvegardé: {checkpoint_path}")
 
             if sample_interval and sample_fn and epoch_num % sample_interval == 0:
-                sample_model = self.ema_model if self.use_ema and self.ema_model is not None else self.model
-                sample_fn(epoch_num, sample_model)
+                sample_fn(epoch_num)
