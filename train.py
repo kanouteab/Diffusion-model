@@ -1,116 +1,151 @@
-import argparse
-import os
+"""Architectures U-Net pour le modèle de diffusion."""
+import math
 
 import torch
-from torchvision.utils import save_image
+import torch.nn as nn
 
-from diffusion_model import Trainer, UNet, load_model_from_checkpoint
-from diffusion_model.noise import p_sample_loop
-from diffusion_model.utils import get_dataloaders
+from .scheduler import linear_beta_schedule
 
 
-def main(args):
-    device = torch.device("cuda" if torch.cuda.is_available() and not args.cpu else "cpu")
-    print(f"Device utilisé : {device}")
+class SinusoidalPositionEmbeddings(nn.Module):
+    def __init__(self, embedding_dim):
+        super().__init__()
+        self.embedding_dim = embedding_dim
 
-    # Chargement / création du modèle
-    if args.resume:
-        if not os.path.isfile(args.resume):
-            raise FileNotFoundError(f"Checkpoint introuvable : {args.resume}")
+    def forward(self, timesteps: torch.Tensor):
+        device = timesteps.device
+        half_dim = self.embedding_dim // 2
+        exponent = -math.log(10000.0) / (half_dim - 1)
+        emb = torch.exp(torch.arange(half_dim, device=device).float() * exponent)
+        emb = timesteps[:, None].float() * emb[None, :]
+        emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=-1)
+        if self.embedding_dim % 2 == 1:
+            emb = torch.cat([emb, torch.zeros(timesteps.shape[0], 1, device=device)], dim=-1)
+        return emb
 
-        model = load_model_from_checkpoint(
-            checkpoint=args.resume,
-            device=device,
-            timesteps=args.timesteps,
-            base_channel=args.base_channel,
+
+class Block(nn.Module):
+    def __init__(self, in_ch, out_ch, time_emb_dim=None):
+        super().__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_ch, out_ch, 3, padding=1),
+            nn.GroupNorm(8, out_ch),
+            nn.SiLU(),
+            nn.Conv2d(out_ch, out_ch, 3, padding=1),
+            nn.GroupNorm(8, out_ch),
+            nn.SiLU(),
         )
-        print(f"Reprise depuis le checkpoint : {args.resume}")
-    else:
-        model = UNet(
-            img_channels=3,
-            base_channel=args.base_channel,
-            timesteps=args.timesteps,
-        ).to(device)
-
-    # Dataloaders
-    train_loader, val_loader = get_dataloaders(
-        batch_size=args.batch_size,
-        image_size=args.image_size,
-        num_workers=args.num_workers,
-        subset_size=args.subset_size,
-        val_split=args.val_split,
-    )
-
-    # Dossiers de sortie
-    os.makedirs(args.checkpoint_dir, exist_ok=True)
-    os.makedirs(args.sample_output_dir, exist_ok=True)
-
-    effective_sample_timesteps = args.sample_timesteps or args.timesteps
-
-    def save_epoch_samples(epoch):
-        model.eval()
-        with torch.no_grad():
-            samples = p_sample_loop(
-                model,
-                (args.sample_num, 3, args.image_size, args.image_size),
-                effective_sample_timesteps,
-                device,
+        self.time_mlp = None
+        if time_emb_dim is not None:
+            self.time_mlp = nn.Sequential(
+                nn.SiLU(),
+                nn.Linear(time_emb_dim, out_ch),
             )
 
-        samples = (samples.clamp(-1, 1) + 1) / 2.0
-
-        image_path = os.path.join(args.sample_output_dir, f"epoch_{epoch}_samples.png")
-        tensor_path = os.path.join(args.sample_output_dir, f"epoch_{epoch}_samples.pt")
-
-        save_image(samples, image_path, nrow=min(8, args.sample_num))
-        torch.save(samples, tensor_path)
-
-        print(f"Échantillons sauvegardés : {image_path}")
-        model.train()
-
-    # Trainer
-    trainer = Trainer(model, train_loader, lr=args.lr, device=device)
-
-    trainer.train(
-        epochs=args.epochs,
-        timesteps=args.timesteps,
-        checkpoint_interval=args.checkpoint_interval,
-        checkpoint_dir=args.checkpoint_dir,
-        sample_interval=args.sample_interval,
-        sample_fn=save_epoch_samples,
-    )
-
-    # Sauvegarde finale
-    if args.output:
-        torch.save(model.state_dict(), args.output)
-        print(f"Modèle final sauvegardé dans {args.output}")
+    def forward(self, x, t=None):
+        h = self.conv(x)
+        if t is not None and self.time_mlp is not None:
+            time_emb = self.time_mlp(t).view(-1, h.shape[1], 1, 1)
+            h = h + time_emb
+        return h
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Entraîne un modèle de diffusion simple")
+class UNet(nn.Module):
+    def __init__(self, img_channels=3, base_channel=64, timesteps=1000):
+        super().__init__()
+        self.timesteps = timesteps
+        self.register_buffer("betas", linear_beta_schedule(timesteps))
+        alphas = 1.0 - self.betas
+        alphas_cumprod = torch.cumprod(alphas, dim=0)
+        self.register_buffer("alphas", alphas)
+        self.register_buffer("alphas_cumprod", alphas_cumprod)
+        self.register_buffer("sqrt_alphas", torch.sqrt(alphas))
+        self.register_buffer("sqrt_alphas_cumprod", torch.sqrt(alphas_cumprod))
+        self.register_buffer("sqrt_one_minus_alphas_cumprod", torch.sqrt(1 - alphas_cumprod))
 
-    parser.add_argument("--epochs", type=int, default=20)
-    parser.add_argument("--batch-size", type=int, default=64)
-    parser.add_argument("--lr", type=float, default=2e-4)
-    parser.add_argument("--timesteps", type=int, default=1000)
-    parser.add_argument("--image-size", type=int, default=32)
-    parser.add_argument("--base-channel", type=int, default=64)
+        time_dim = base_channel * 4
+        self.time_mlp = nn.Sequential(
+            SinusoidalPositionEmbeddings(time_dim),
+            nn.Linear(time_dim, time_dim),
+            nn.SiLU(),
+        )
 
-    parser.add_argument("--subset-size", type=int, default=None, help="Taille du sous-ensemble d'entraînement")
-    parser.add_argument("--val-split", type=float, default=0.0, help="Proportion de validation")
-    parser.add_argument("--num-workers", type=int, default=2)
+        self.inc = Block(img_channels, base_channel, time_dim)
+        self.down1 = Block(base_channel, base_channel * 2, time_dim)
+        self.down2 = Block(base_channel * 2, base_channel * 4, time_dim)
+        self.down3 = Block(base_channel * 4, base_channel * 8, time_dim)
+        self.bottleneck = Block(base_channel * 8, base_channel * 8, time_dim)
 
-    parser.add_argument("--checkpoint-interval", type=int, default=0, help="Sauvegarde un checkpoint tous les n epochs")
-    parser.add_argument("--checkpoint-dir", type=str, default="outputs/checkpoints")
+        self.up1 = Block(base_channel * 8 + base_channel * 8, base_channel * 4, time_dim)
+        self.up2 = Block(base_channel * 4 + base_channel * 4, base_channel * 2, time_dim)
+        self.up3 = Block(base_channel * 2 + base_channel * 2, base_channel, time_dim)
+        self.up4 = Block(base_channel + base_channel, base_channel, time_dim)
 
-    parser.add_argument("--sample-interval", type=int, default=0, help="Génère des échantillons tous les n epochs")
-    parser.add_argument("--sample-num", type=int, default=8)
-    parser.add_argument("--sample-timesteps", type=int, default=None)
-    parser.add_argument("--sample-output-dir", type=str, default="outputs/train_samples")
+        self.out = nn.Conv2d(base_channel, img_channels, 1)
 
-    parser.add_argument("--output", type=str, default="diffusion_model.pth")
-    parser.add_argument("--resume", type=str, default=None)
-    parser.add_argument("--cpu", action="store_true")
+    def forward(self, x, t):
+        t = self.time_mlp(t)
 
-    args = parser.parse_args()
-    main(args)
+        e1 = self.inc(x, t)
+        e2 = self.down1(nn.functional.avg_pool2d(e1, 2), t)
+        e3 = self.down2(nn.functional.avg_pool2d(e2, 2), t)
+        e4 = self.down3(nn.functional.avg_pool2d(e3, 2), t)
+        b = self.bottleneck(nn.functional.avg_pool2d(e4, 2), t)
+
+        d1 = nn.functional.interpolate(b, scale_factor=2, mode="nearest")
+        d1 = torch.cat([d1, e4], dim=1)
+        d1 = self.up1(d1, t)
+
+        d2 = nn.functional.interpolate(d1, scale_factor=2, mode="nearest")
+        d2 = torch.cat([d2, e3], dim=1)
+        d2 = self.up2(d2, t)
+
+        d3 = nn.functional.interpolate(d2, scale_factor=2, mode="nearest")
+        d3 = torch.cat([d3, e2], dim=1)
+        d3 = self.up3(d3, t)
+
+        d4 = nn.functional.interpolate(d3, scale_factor=2, mode="nearest")
+        d4 = torch.cat([d4, e1], dim=1)
+        d4 = self.up4(d4, t)
+
+        return self.out(d4)
+
+
+class LegacyBlock(nn.Module):
+    def __init__(self, in_ch, out_ch):
+        super().__init__()
+        self.block = nn.Sequential(
+            nn.Conv2d(in_ch, out_ch, 3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_ch, out_ch, 3, padding=1),
+            nn.ReLU(inplace=True),
+        )
+
+    def forward(self, x):
+        return self.block(x)
+
+
+class LegacyUNet(nn.Module):
+    def __init__(self, img_channels=3, base_channel=64, timesteps=1000):
+        super().__init__()
+        self.timesteps = timesteps
+        self.betas = torch.linspace(1e-4, 0.02, timesteps)
+        alphas = 1.0 - self.betas
+        alphas_cumprod = torch.cumprod(alphas, dim=0)
+        self.register_buffer("sqrt_alphas", torch.sqrt(alphas))
+        self.register_buffer("alphas_cumprod", alphas_cumprod)
+        self.register_buffer("sqrt_alphas_cumprod", torch.sqrt(alphas_cumprod))
+        self.register_buffer("sqrt_one_minus_alphas_cumprod", torch.sqrt(1 - alphas_cumprod))
+
+        self.enc1 = LegacyBlock(img_channels, base_channel)
+        self.enc2 = LegacyBlock(base_channel, base_channel * 2)
+        self.dec1 = LegacyBlock(base_channel * 2 + base_channel, base_channel)
+        self.out = nn.Conv2d(base_channel, img_channels, 1)
+
+    def forward(self, x, t):
+        e1 = self.enc1(x)
+        e2 = self.enc2(nn.functional.avg_pool2d(e1, 2))
+        d1 = nn.functional.interpolate(e2, scale_factor=2, mode="nearest")
+        d1 = torch.cat([d1, e1], dim=1)
+        d1 = self.dec1(d1)
+        return self.out(d1)
