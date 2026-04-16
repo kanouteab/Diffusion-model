@@ -1,60 +1,150 @@
-"""Utilitaires dataset et dataloader."""
+"""Utilitaires dataset, dataloader et chargement de checkpoints."""
+import torch
 import torchvision.transforms as T
+from torch.utils.data import DataLoader, Subset, random_split
 from torchvision.datasets import CIFAR10
-from torch.utils.data import DataLoader, Subset
 
 from .model import LegacyUNet, UNet
 
 
 def _infer_checkpoint_timesteps(state, default_timesteps):
-    # Ce helper isole la logique d'inférence pour simplifier la fonction de chargement.
-    # Si le checkpoint contient le buffer "betas", sa longueur donne les timesteps réels.
+    """Infère le nombre de timesteps à partir d'un state_dict si possible."""
     if isinstance(state, dict):
-        # On tente d'extraire le buffer de schedule depuis le state_dict.
         betas = state.get("betas")
         if isinstance(betas, torch.Tensor) and betas.ndim == 1 and betas.numel() > 0:
-            # Conversion explicite en int Python pour éviter les surprises de type.
             return int(betas.numel())
-    # Sinon, on conserve la valeur demandée en entrée.
     return int(default_timesteps)
 
 
-def load_model_from_checkpoint(checkpoint, device, timesteps):
+def load_model_from_checkpoint(checkpoint, device, timesteps, base_channel=64):
     """Charge un checkpoint en tentant d'abord UNet puis LegacyUNet."""
-    # Chargement brut des poids depuis disque.
     state = torch.load(checkpoint, map_location=device)
-    # Support des checkpoints encapsulés: {"state_dict": ...}.
+
     if isinstance(state, dict) and "state_dict" in state:
         state = state["state_dict"]
 
-    # Détection automatique du nombre de timesteps compatible avec le checkpoint.
     checkpoint_timesteps = _infer_checkpoint_timesteps(state, timesteps)
 
-    # Première tentative: architecture UNet actuelle.
-    model = UNet(img_channels=3, base_channel=64, timesteps=checkpoint_timesteps).to(device)
+    model = UNet(
+        img_channels=3,
+        base_channel=base_channel,
+        timesteps=checkpoint_timesteps,
+    ).to(device)
+
     try:
-        # Chargement strict pour détecter les incompatibilités réelles.
         model.load_state_dict(state)
     except RuntimeError:
-        # Fallback LegacyUNet pour checkpoints plus anciens.
         print(f"Checkpoint incompatible avec UNet. Chargement du LegacyUNet pour {checkpoint}.")
-        model = LegacyUNet(img_channels=3, base_channel=64, timesteps=checkpoint_timesteps).to(device)
-        # strict=False pour tolérer les clés absentes/supplémentaires Legacy.
+        model = LegacyUNet(
+            img_channels=3,
+            base_channel=base_channel,
+            timesteps=checkpoint_timesteps,
+        ).to(device)
         model.load_state_dict(state, strict=False)
-    # Le modèle est renvoyé prêt pour inférence/évaluation.
+
     model.eval()
     return model
 
 
-def get_dataloader(batch_size=32, image_size=32, train=True, num_workers=2, subset_size=None):
-    transform = T.Compose([
+def _build_transform(image_size=32):
+    return T.Compose([
         T.Resize((image_size, image_size)),
         T.ToTensor(),
         T.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
     ])
-    dataset = CIFAR10(root="./data", train=train, download=True, transform=transform)
+
+
+def get_dataloader(batch_size=32, image_size=32, train=True, num_workers=2, subset_size=None):
+    """Retourne un seul DataLoader CIFAR-10."""
+    transform = _build_transform(image_size)
+
+    dataset = CIFAR10(
+        root="./data",
+        train=train,
+        download=True,
+        transform=transform,
+    )
+
     if subset_size is not None and subset_size > 0:
         subset_size = min(subset_size, len(dataset))
-        # On prend les premiers indices pour garantir un comportement déterministe simple.
         dataset = Subset(dataset, list(range(subset_size)))
-    return DataLoader(dataset, batch_size=batch_size, shuffle=train, num_workers=num_workers, pin_memory=True)
+
+    return DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=train,
+        num_workers=num_workers,
+        pin_memory=True,
+    )
+
+
+def get_dataloaders(
+    batch_size=32,
+    image_size=32,
+    num_workers=2,
+    subset_size=None,
+    val_split=0.0,
+):
+    """
+    Retourne train_loader et val_loader.
+    Si val_split <= 0, val_loader = None.
+    """
+    transform = _build_transform(image_size)
+
+    dataset = CIFAR10(
+        root="./data",
+        train=True,
+        download=True,
+        transform=transform,
+    )
+
+    if subset_size is not None and subset_size > 0:
+        subset_size = min(subset_size, len(dataset))
+        dataset = Subset(dataset, list(range(subset_size)))
+
+    if val_split is None or val_split <= 0:
+        train_loader = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=True,
+        )
+        return train_loader, None
+
+    val_size = int(len(dataset) * val_split)
+    train_size = len(dataset) - val_size
+
+    if val_size == 0:
+        train_loader = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=True,
+        )
+        return train_loader, None
+
+    train_dataset, val_dataset = random_split(
+        dataset,
+        [train_size, val_size],
+        generator=torch.Generator().manual_seed(42),
+    )
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=True,
+    )
+
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True,
+    )
+
+    return train_loader, val_loader

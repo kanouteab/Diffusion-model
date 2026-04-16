@@ -4,21 +4,36 @@ import os
 import torch
 from torchvision.utils import save_image
 
-from diffusion_model import Trainer, UNet
+from diffusion_model import Trainer, UNet, load_model_from_checkpoint
 from diffusion_model.noise import p_sample_loop
 from diffusion_model.utils import get_dataloaders
 
 
 def main(args):
+    # Détection automatique du device
     device = torch.device("cuda" if torch.cuda.is_available() and not args.cpu else "cpu")
     print(f"Device utilisé : {device}")
 
-    model = UNet(
-        img_channels=3,
-        base_channel=args.base_channel,
-        timesteps=args.timesteps,
-    )
+    # Chargement du modèle
+    if args.resume:
+        if os.path.isfile(args.resume):
+            model = load_model_from_checkpoint(
+                checkpoint=args.resume,
+                device=device,
+                timesteps=args.timesteps,
+                base_channel=args.base_channel,
+            )
+            print(f"Reprise depuis le checkpoint : {args.resume}")
+        else:
+            raise FileNotFoundError(f"Checkpoint introuvable : {args.resume}")
+    else:
+        model = UNet(
+            img_channels=3,
+            base_channel=args.base_channel,
+            timesteps=args.timesteps,
+        ).to(device)
 
+    # Chargement des dataloaders
     train_loader, val_loader = get_dataloaders(
         batch_size=args.batch_size,
         image_size=args.image_size,
@@ -27,16 +42,9 @@ def main(args):
         val_split=args.val_split,
     )
 
+    # Création des dossiers de sortie
     os.makedirs(args.checkpoint_dir, exist_ok=True)
     os.makedirs(args.sample_output_dir, exist_ok=True)
-
-    if args.resume:
-        if os.path.isfile(args.resume):
-            checkpoint = torch.load(args.resume, map_location=device)
-            model.load_state_dict(checkpoint)
-            print(f"Reprise depuis le checkpoint : {args.resume}")
-        else:
-            raise FileNotFoundError(f"Checkpoint introuvable : {args.resume}")
 
     effective_sample_timesteps = args.sample_timesteps or args.timesteps
 
@@ -61,6 +69,7 @@ def main(args):
         print(f"Échantillons sauvegardés : {image_path}")
         model.train()
 
+    # Entraînement
     trainer = Trainer(model, train_loader, lr=args.lr, device=device)
     trainer.train(
         epochs=args.epochs,
@@ -71,6 +80,7 @@ def main(args):
         sample_fn=save_epoch_samples,
     )
 
+    # Sauvegarde finale
     if args.output:
         torch.save(model.state_dict(), args.output)
         print(f"Modèle final sauvegardé dans {args.output}")
@@ -87,7 +97,7 @@ if __name__ == "__main__":
     parser.add_argument("--base-channel", type=int, default=64)
 
     parser.add_argument("--subset-size", type=int, default=None, help="Taille du sous-ensemble d'entraînement")
-    parser.add_argument("--val-split", type=float, default=0.0, help="Proportion de validation")
+    parser.add_argument("--val-split", type=float, default=0.0, help="Proportion validation")
     parser.add_argument("--num-workers", type=int, default=2)
 
     parser.add_argument("--checkpoint-interval", type=int, default=0, help="Sauvegarde un checkpoint tous les n epochs")
