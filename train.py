@@ -13,17 +13,18 @@ def main(args):
     device = torch.device("cuda" if torch.cuda.is_available() and not args.cpu else "cpu")
     print(f"Device utilisé : {device}")
 
+    # Chargement / création du modèle
     if args.resume:
-        if os.path.isfile(args.resume):
-            model = load_model_from_checkpoint(
-                checkpoint=args.resume,
-                device=device,
-                timesteps=args.timesteps,
-                base_channel=args.base_channel,
-            )
-            print(f"Reprise depuis le checkpoint : {args.resume}")
-        else:
+        if not os.path.isfile(args.resume):
             raise FileNotFoundError(f"Checkpoint introuvable : {args.resume}")
+
+        model = load_model_from_checkpoint(
+            checkpoint=args.resume,
+            device=device,
+            timesteps=args.timesteps,
+            base_channel=args.base_channel,
+        )
+        print(f"Reprise depuis le checkpoint : {args.resume}")
     else:
         model = UNet(
             img_channels=3,
@@ -31,6 +32,7 @@ def main(args):
             timesteps=args.timesteps,
         ).to(device)
 
+    # Dataloaders
     train_loader, val_loader = get_dataloaders(
         batch_size=args.batch_size,
         image_size=args.image_size,
@@ -39,6 +41,7 @@ def main(args):
         val_split=args.val_split,
     )
 
+    # Dossiers de sortie
     os.makedirs(args.checkpoint_dir, exist_ok=True)
     os.makedirs(args.sample_output_dir, exist_ok=True)
 
@@ -65,7 +68,9 @@ def main(args):
         print(f"Échantillons sauvegardés : {image_path}")
         model.train()
 
+    # Trainer
     trainer = Trainer(model, train_loader, lr=args.lr, device=device)
+
     trainer.train(
         epochs=args.epochs,
         timesteps=args.timesteps,
@@ -75,6 +80,7 @@ def main(args):
         sample_fn=save_epoch_samples,
     )
 
+    # Sauvegarde finale
     if args.output:
         torch.save(model.state_dict(), args.output)
         print(f"Modèle final sauvegardé dans {args.output}")
