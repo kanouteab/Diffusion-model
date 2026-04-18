@@ -35,12 +35,33 @@ def bilateral_postprocess(img_tensor: torch.Tensor, d=5, sigma_color=40, sigma_s
     return bgr_uint8_to_tensor_chw(filtered)
 
 
-def denoise_one_step(model, x_t, t):
-    predicted_noise = model(x_t, t)
-    sqrt_alpha_bar = model.sqrt_alphas_cumprod[t].view(-1, 1, 1, 1)
-    sqrt_one_minus_alpha_bar = model.sqrt_one_minus_alphas_cumprod[t].view(-1, 1, 1, 1)
-    x0_pred = (x_t - sqrt_one_minus_alpha_bar * predicted_noise) / sqrt_alpha_bar
-    return x0_pred.clamp(-1, 1)
+def denoise_iterative(model, x_t: torch.Tensor, start_t: int, device: torch.device) -> torch.Tensor:
+    """
+    Débruitage itératif depuis x_t jusqu'à x_0 en suivant le processus inverse DDPM.
+    """
+    img = x_t.clone()
+
+    for i in reversed(range(start_t + 1)):
+        t = torch.full((img.size(0),), i, device=device, dtype=torch.long)
+        predicted_noise = model(img, t)
+
+        beta = model.betas[i]
+        sqrt_one_minus_alphas_cumprod = model.sqrt_one_minus_alphas_cumprod[i]
+        sqrt_recip_alpha = 1.0 / model.sqrt_alphas[i]
+
+        if i > 0:
+            posterior_variance = beta * (1.0 - model.alphas_cumprod[i - 1]) / (1.0 - model.alphas_cumprod[i])
+            noise = torch.randn_like(img)
+        else:
+            posterior_variance = torch.tensor(0.0, device=device, dtype=img.dtype)
+            noise = torch.zeros_like(img)
+
+        mean = sqrt_recip_alpha * (
+            img - beta / sqrt_one_minus_alphas_cumprod * predicted_noise
+        )
+        img = mean + torch.sqrt(posterior_variance) * noise
+
+    return img.clamp(-1, 1)
 
 
 def main(args):
@@ -74,7 +95,7 @@ def main(args):
             model.sqrt_alphas_cumprod,
             model.sqrt_one_minus_alphas_cumprod,
         )
-        x_restored = denoise_one_step(model, x_t, t)
+        x_restored = denoise_iterative(model, x_t, timestep, device)
 
     if args.postprocess:
         processed = []
