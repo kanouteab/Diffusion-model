@@ -4,3 +4,4 @@ tqdm
 Pillow
 matplotlib>=3.7.0
 numpy
+opencv-python
