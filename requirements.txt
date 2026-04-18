@@ -3,3 +3,4 @@ torchvision>=0.15.0
 tqdm
 Pillow
 matplotlib>=3.7.0
+numpy
