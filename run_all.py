@@ -81,7 +81,7 @@ def _plot_learning_curves(history: dict, output_path: str) -> bool:
 
     plt.title("Courbes d'apprentissage")
     plt.xlabel("Epoch")
-    plt.ylabel("Loss (MSE)")
+    plt.ylabel("Loss")
     plt.grid(alpha=0.3)
     plt.legend(loc="upper right")
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
@@ -191,6 +191,7 @@ def run_all_pipeline(args: Namespace) -> None:
         best_model_output=args.best_model_output,
         weight_decay=args.weight_decay,
         grad_clip=args.grad_clip,
+        l1_weight=args.l1_weight,
         cpu=args.cpu,
     )
     history = run_train(train_args)
@@ -260,6 +261,10 @@ def run_all_pipeline(args: Namespace) -> None:
         num_batches=args.eval_num_batches,
         output_json=args.denoising_metrics_output,
         output_image=args.denoising_metrics_image,
+        postprocess=args.postprocess,
+        bilateral_d=args.bilateral_d,
+        bilateral_sigma_color=args.bilateral_sigma_color,
+        bilateral_sigma_space=args.bilateral_sigma_space,
         cpu=args.cpu,
     )
     denoising_report = run_evaluate_denoising(denoise_eval_args)
@@ -278,6 +283,10 @@ def run_all_pipeline(args: Namespace) -> None:
         num_samples=args.sample_num,
         num_workers=args.eval_num_workers,
         output_dir=args.denoising_examples_dir,
+        postprocess=args.postprocess,
+        bilateral_d=args.bilateral_d,
+        bilateral_sigma_color=args.bilateral_sigma_color,
+        bilateral_sigma_space=args.bilateral_sigma_space,
         cpu=args.cpu,
     )
     run_denoise(denoise_args)
@@ -361,6 +370,7 @@ def add_train_parser(subparsers) -> None:
     parser.add_argument("--best-model-output", type=str, default="outputs/best_model.pth")
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--grad-clip", type=float, default=1.0)
+    parser.add_argument("--l1-weight", type=float, default=0.05)
     parser.add_argument("--cpu", action="store_true")
     parser.set_defaults(func=run_train)
 
@@ -438,6 +448,7 @@ def add_all_parser(subparsers) -> None:
     parser.add_argument("--best-model-output", type=str, default="outputs/best_model.pth")
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--grad-clip", type=float, default=1.0)
+    parser.add_argument("--l1-weight", type=float, default=0.05)
 
     parser.add_argument("--pretrained-model", type=str, default="outputs/unet_trained.pth")
     parser.add_argument("--performance-output", type=str, default="outputs/performance_report.json")
@@ -453,6 +464,11 @@ def add_all_parser(subparsers) -> None:
     parser.add_argument("--denoising-metrics-image", type=str, default="outputs/noisy_vs_restored_grid.png")
     parser.add_argument("--denoising-plot", type=str, default="outputs/denoising_comparison.png")
     parser.add_argument("--denoising-examples-dir", type=str, default="outputs/denoising_examples")
+
+    parser.add_argument("--postprocess", action="store_true")
+    parser.add_argument("--bilateral-d", type=int, default=5)
+    parser.add_argument("--bilateral-sigma-color", type=float, default=40.0)
+    parser.add_argument("--bilateral-sigma-space", type=float, default=40.0)
 
     parser.add_argument("--sample-output", type=str, default="outputs/final_samples.pt")
     parser.add_argument("--sample-output-image", type=str, default="outputs/final_samples.png")
