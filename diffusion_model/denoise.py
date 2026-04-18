@@ -1,7 +1,8 @@
-"""Génération d'exemples de débruitage."""
 import argparse
 import os
 
+import cv2
+import numpy as np
 import torch
 from torchvision.utils import save_image
 
@@ -10,11 +11,31 @@ from diffusion_model.noise import q_sample
 from diffusion_model.utils import get_dataloader
 
 
-def tensor_to_01(x: torch.Tensor) -> torch.Tensor:
+def tensor_to_01(x):
     return (x.clamp(-1, 1) + 1.0) / 2.0
 
 
-def denoise_one_step(model, x_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+def tensor_chw_to_bgr_uint8(img_tensor: torch.Tensor) -> np.ndarray:
+    img = tensor_to_01(img_tensor).detach().cpu().numpy()
+    img = np.transpose(img, (1, 2, 0))  # HWC
+    img = (img * 255.0).clip(0, 255).astype(np.uint8)
+    return cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+
+
+def bgr_uint8_to_tensor_chw(img_bgr: np.ndarray) -> torch.Tensor:
+    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+    img = img_rgb.astype(np.float32) / 255.0
+    img = torch.from_numpy(np.transpose(img, (2, 0, 1)))  # CHW
+    return img * 2.0 - 1.0
+
+
+def bilateral_postprocess(img_tensor: torch.Tensor, d=5, sigma_color=40, sigma_space=40) -> torch.Tensor:
+    img_bgr = tensor_chw_to_bgr_uint8(img_tensor)
+    filtered = cv2.bilateralFilter(img_bgr, d=d, sigmaColor=sigma_color, sigmaSpace=sigma_space)
+    return bgr_uint8_to_tensor_chw(filtered)
+
+
+def denoise_one_step(model, x_t, t):
     predicted_noise = model(x_t, t)
     sqrt_alpha_bar = model.sqrt_alphas_cumprod[t].view(-1, 1, 1, 1)
     sqrt_one_minus_alpha_bar = model.sqrt_one_minus_alphas_cumprod[t].view(-1, 1, 1, 1)
@@ -55,6 +76,19 @@ def main(args):
         )
         x_restored = denoise_one_step(model, x_t, t)
 
+    if args.postprocess:
+        processed = []
+        for i in range(x_restored.size(0)):
+            processed.append(
+                bilateral_postprocess(
+                    x_restored[i].detach().cpu(),
+                    d=args.bilateral_d,
+                    sigma_color=args.bilateral_sigma_color,
+                    sigma_space=args.bilateral_sigma_space,
+                )
+            )
+        x_restored = torch.stack(processed).to(device)
+
     os.makedirs(args.output_dir, exist_ok=True)
 
     save_image(tensor_to_01(x), os.path.join(args.output_dir, "clean.png"), nrow=min(8, args.num_samples))
@@ -73,6 +107,10 @@ if __name__ == "__main__":
     parser.add_argument("--num-samples", type=int, default=8)
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--output-dir", type=str, default="outputs/denoising_examples")
+    parser.add_argument("--postprocess", action="store_true")
+    parser.add_argument("--bilateral-d", type=int, default=5)
+    parser.add_argument("--bilateral-sigma-color", type=float, default=40.0)
+    parser.add_argument("--bilateral-sigma-space", type=float, default=40.0)
     parser.add_argument("--cpu", action="store_true")
     args = parser.parse_args()
     main(args)
