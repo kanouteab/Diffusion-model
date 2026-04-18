@@ -3,7 +3,7 @@ import subprocess
 command = [
     "python", "run_all.py", "all",
 
-    "--epochs", "30",
+    "--epochs", "50",
     "--batch-size", "64",
     "--lr", "1e-4",
     "--timesteps", "1000",
