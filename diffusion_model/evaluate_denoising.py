@@ -16,7 +16,30 @@ from diffusion_model.utils import get_dataloader
 
 def tensor_to_01(x: torch.Tensor) -> torch.Tensor:
     return (x.clamp(-1, 1) + 1.0) / 2.0
+def denoise_iterative(model, x_t: torch.Tensor, start_t: int, device: torch.device) -> torch.Tensor:
+    img = x_t.clone()
 
+    for i in reversed(range(start_t + 1)):
+        t = torch.full((img.size(0),), i, device=device, dtype=torch.long)
+        predicted_noise = model(img, t)
+
+        beta = model.betas[i]
+        sqrt_one_minus_alphas_cumprod = model.sqrt_one_minus_alphas_cumprod[i]
+        sqrt_recip_alpha = 1.0 / model.sqrt_alphas[i]
+
+        if i > 0:
+            posterior_variance = beta * (1.0 - model.alphas_cumprod[i - 1]) / (1.0 - model.alphas_cumprod[i])
+            noise = torch.randn_like(img)
+        else:
+            posterior_variance = torch.tensor(0.0, device=device, dtype=img.dtype)
+            noise = torch.zeros_like(img)
+
+        mean = sqrt_recip_alpha * (
+            img - beta / sqrt_one_minus_alphas_cumprod * predicted_noise
+        )
+        img = mean + torch.sqrt(posterior_variance) * noise
+
+    return img.clamp(-1, 1)
 
 def compute_psnr(x: torch.Tensor, y: torch.Tensor, max_val: float = 1.0) -> float:
     mse = F.mse_loss(x, y).item()
@@ -130,7 +153,7 @@ def main(args):
                 model.sqrt_one_minus_alphas_cumprod,
             )
 
-            x_restored = denoise_one_step(model, x_t, t)
+            x_restored = denoise_iterative(model, x_t, timestep, device)
 
             if args.postprocess:
                 processed = []
