@@ -47,19 +47,54 @@ def load_model_from_checkpoint(checkpoint, device, timesteps):
     return model
 
 
-def get_dataloader(batch_size=32, image_size=32, train=True, num_workers=2, subset_size=None):
-    # Transformations standard: resize + tensor + normalisation centrée en 0.
-    transform = T.Compose([
-        T.Resize((image_size, image_size)),
-        T.ToTensor(),
-        T.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-    ])
-    # Dataset CIFAR-10 stocké dans ./data (téléchargé si absent).
-    dataset = CIFAR10(root="./data", train=train, download=True, transform=transform)
+import random
+import torch
+import torchvision.transforms as T
+from torchvision.datasets import CIFAR10
+from torch.utils.data import DataLoader, Subset
+
+
+def get_dataloader(
+    batch_size=32,
+    image_size=32,
+    train=True,
+    num_workers=2,
+    subset_size=None,
+    augment=True,
+    seed=42,
+):
+    if train and augment:
+        transform = T.Compose([
+            T.Resize((image_size, image_size)),
+            T.RandomHorizontalFlip(p=0.5),
+            T.ToTensor(),
+            T.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+        ])
+    else:
+        transform = T.Compose([
+            T.Resize((image_size, image_size)),
+            T.ToTensor(),
+            T.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+        ])
+
+    dataset = CIFAR10(
+        root="./data",
+        train=train,
+        download=True,
+        transform=transform,
+    )
+
     if subset_size is not None and subset_size > 0:
-        # Sous-échantillonnage utile pour des runs rapides.
         subset_size = min(subset_size, len(dataset))
-        # On prend les premiers indices pour garantir un comportement déterministe simple.
-        dataset = Subset(dataset, list(range(subset_size)))
-    # DataLoader prêt pour entraînement/évaluation.
-    return DataLoader(dataset, batch_size=batch_size, shuffle=train, num_workers=num_workers, pin_memory=True)
+        rng = random.Random(seed)
+        indices = rng.sample(range(len(dataset)), subset_size)
+        dataset = Subset(dataset, indices)
+
+    return DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=train,
+        num_workers=num_workers,
+        pin_memory=torch.cuda.is_available(),
+        drop_last=train,
+    )
