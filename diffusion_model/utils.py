@@ -6,7 +6,6 @@ from PIL import Image
 import torch
 import torchvision.transforms as T
 from torch.utils.data import DataLoader, Dataset, Subset
-from torchvision.datasets import CelebA
 
 from .model import LegacyUNet, UNet
 
@@ -22,17 +21,17 @@ class FlatImageDataset(Dataset):
                 if name.lower().endswith((".jpg", ".jpeg", ".png")):
                     self.files.append(os.path.join(dirpath, name))
 
-        if not self.files:
-            raise FileNotFoundError(f"Aucune image trouvée dans {root}")
+        if len(self.files) == 0:
+            raise FileNotFoundError(f"Aucune image trouvée dans : {root}")
 
     def __len__(self):
         return len(self.files)
 
     def __getitem__(self, idx):
-        img = Image.open(self.files[idx]).convert("RGB")
+        image = Image.open(self.files[idx]).convert("RGB")
         if self.transform:
-            img = self.transform(img)
-        return img, 0
+            image = self.transform(image)
+        return image, 0
 
 
 def _infer_checkpoint_timesteps(state, default_timesteps):
@@ -64,28 +63,42 @@ def load_model_from_checkpoint(checkpoint, device, timesteps):
     return model
 
 
-def find_kaggle_celeba_root():
+def find_image_root():
     possible_paths = [
-        "/kaggle/input/celeba-dataset",
-        "/kaggle/input/celeba-dataset/img_align_celeba",
         "/kaggle/input/celeba-dataset/img_align_celeba/img_align_celeba",
+        "/kaggle/input/celeba-dataset/img_align_celeba",
+        "/kaggle/input/celeba-dataset",
         "/kaggle/input/img-align-celeba",
         "/kaggle/input/celeba",
+        "./data",
     ]
 
     for path in possible_paths:
         if os.path.isdir(path):
-            return path
+            for _, _, files in os.walk(path):
+                if any(f.lower().endswith((".jpg", ".jpeg", ".png")) for f in files):
+                    return path
 
     if os.path.isdir("/kaggle/input"):
         for root, _, files in os.walk("/kaggle/input"):
             if any(f.lower().endswith((".jpg", ".jpeg", ".png")) for f in files):
                 return root
 
-    return None
+    raise FileNotFoundError(
+        "Aucun dossier d'images trouvé. Vérifie le dataset avec : "
+        "!find /kaggle/input -maxdepth 5 -type d"
+    )
 
 
-def get_transform(image_size=64, train=True, augment=True):
+def get_dataloader(
+    batch_size=32,
+    image_size=64,
+    train=True,
+    num_workers=2,
+    subset_size=None,
+    augment=True,
+    seed=42,
+):
     transforms = [
         T.CenterCrop(178),
         T.Resize((image_size, image_size)),
@@ -99,35 +112,15 @@ def get_transform(image_size=64, train=True, augment=True):
         T.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
     ])
 
-    return T.Compose(transforms)
+    transform = T.Compose(transforms)
 
+    image_root = find_image_root()
+    print(f"Chargement des images depuis : {image_root}")
 
-def get_dataloader(
-    batch_size=32,
-    image_size=64,
-    train=True,
-    num_workers=2,
-    subset_size=None,
-    augment=True,
-    seed=42,
-):
-    transform = get_transform(image_size=image_size, train=train, augment=augment)
-
-    kaggle_root = find_kaggle_celeba_root()
-
-    if kaggle_root is not None:
-        print(f"Chargement CelebA depuis Kaggle : {kaggle_root}")
-        dataset = FlatImageDataset(root=kaggle_root, transform=transform)
-    else:
-        print("Chargement CelebA depuis ./data")
-        split = "train" if train else "valid"
-        dataset = CelebA(
-            root="./data",
-            split=split,
-            target_type="attr",
-            download=True,
-            transform=transform,
-        )
+    dataset = FlatImageDataset(
+        root=image_root,
+        transform=transform,
+    )
 
     if subset_size is not None and subset_size > 0:
         subset_size = min(subset_size, len(dataset))
